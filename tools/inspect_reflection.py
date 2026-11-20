@@ -65,3 +65,14 @@ for line in lines:
     if re.search(r"(?:Class|BlueprintGeneratedClass|DataTable) (?!/Script/)(?:[^ ]*(Cosmetic|Pattern|Profile|Enemy)[^ ]*)",line,re.I):
         print(line[:300]);c+=1
         if c>120:break
+
+
+print("=== INTERACTABLE OBJECT METHODS ===")
+for i,line in enumerate(lines):
+    if "Function /Script/Helden.HeldenInteractableObject:" in line or "Function /Script/Helden.HeldenCosmeticLoot:" in line:
+        print(line.split("] ",1)[-1].split(" [n:",1)[0])
+        for arg in lines[i+1:i+6]:
+            if "/Script/Helden.HeldenInteractableObject:" in arg or "/Script/Helden.HeldenCosmeticLoot:" in arg:
+                if "Function /" in arg: break
+                print("  "+arg.split("] ",1)[-1].split(" [o:",1)[0])
+            else: break
