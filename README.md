@@ -1,6 +1,20 @@
 # Grain Rot — Enemy Pattern Drops
 
-**v0.1.0-alpha (test build).** UE4SS 3.x Lua mod for `Helden` / Grain Rot.
+**v0.1.1-fps-alpha (test build).** UE4SS 3.x Lua mod for `Helden` / Grain Rot.
+
+## v0.1.1 FPS hotfix (2026-11-20)
+
+**Player report:** cosmetics do unlock, but a freeze/hitch occurs when an enemy dies. There is no UE4SS.log attached to the report; the exact hotspot is not yet proven. Do **not** infer that a successful mock implies hitch elimination.
+
+- `OnCharacterDeath` now only validates/snapshots the enemy (type, key, world, position) and queues an event. No `FindAllOf("HeldenPlayerController")`, profile search, DataTable scan, Blueprint lookup, actor spawn, or native interaction inside the death callback.
+- Cache the authoritative `GameMode`, the local `GameInstance`, the cosmetic DataTable candidate list, and the cosmetic loot Blueprint after first discovery.
+- Prewarm assets **during idle game-thread timer ticks**, before the first kill when possible. Cache lookup retries are throttled when assets are not loaded.
+- Build a set of owned cosmetic IDs **once per award**, rather than rescanning native TArrays for every candidate.
+- Process at most **one cosmetic pickup per timer tick** and require **two 350ms timer ticks between award attempts**. A multi-kill queue is not granted all at once. The roll chance is still 100%.
+- Emit `PERF SpawnActor`, `PERF OnRep_CosmeticID`, `PERF NativeInteract`, `PERF PrewarmDataTable`, and `PERF DeathCallback` entries only for operations over ~18ms of Lua/engine CPU time. `os.clock` is used **only** for diagnostic durations, not for delays/scheduling.
+- The test suite includes checks that kill callbacks do no global registry, DataTable or Blueprint lookup, plus a four-enemy burst test.
+
+**If freezing persists:** submit `UE4SS.log` from a kill; look for `PERF NativeInteract cpu_ms` and `PERF SpawnActor cpu_ms`. A main-thread stall inside native pickup is still possible and requires a separate change to the award mechanism.
 
 ## Requested behavior
 
@@ -15,7 +29,7 @@
 ## Install
 
 1. **Back up the game profile and saves.** This alpha changes permanent cosmetics.
-2. Download `GrainRotEnemyPatternDrops-v0.1.0-alpha` artifact from the successful [GitHub Actions test/package run](../../actions/workflows/ci.yml); open the artifact and extract the enclosed ZIP.
+2. Download `GrainRotEnemyPatternDrops-v0.1.1-fps-alpha` artifact from the successful [GitHub Actions test/package run](../../actions/workflows/ci.yml); open the artifact and extract the enclosed ZIP.
 3. Unzip the installation ZIP into `Grain Rot/Helden/Binaries/Win64/`, leaving the existing UE4SS installation untouched.
 4. Check files: `ue4ss/Mods/GrainRotEnemyPatternDrops/Scripts/main.lua` and `ue4ss/Mods/GrainRotEnemyPatternDrops/enabled.txt`.
 5. **Host only** in multiplayer. On an expendable profile, defeat at least two enemies and inspect `UE4SS.log` for `[GrainRotEnemyPatternDrops]` records.
@@ -45,7 +59,7 @@ Read `SirRosa/Grain-Rot-Mod-Data-Base` (current USMAP + 32MB ObjectDump, build `
 
 ## Known limitations
 
-- **No successful live run is documented yet**. Actions test syntax and Lua mocks, not native game execution.
+- **Player confirmed cosmetic drops work in a live session**, but also reported a freeze on enemy death using v0.1.0. The FPS hotfix is not yet validated in-game. Actions test syntax and Lua mocks only.
 - Killer is not exposed by the reflected `OnCharacterDeath` argument. This alpha picks the nearest living/player character; kills by traps can also count.
 - Remote players' saved profiles are not accessible through the host's local `ProfileSaveGame`. Native pickup and replicated `NewCosmeticUnlocks` need a two-player session and reload verification, especially for already owned remote cosmetics.
 - Candidate discovery relies on the real runtime CosmeticDataTable and identifying pattern texture/color rows. If the table uses different category names, the log will expose the failure and the filter must be refined.
