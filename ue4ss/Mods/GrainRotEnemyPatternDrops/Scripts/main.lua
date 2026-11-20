@@ -194,6 +194,7 @@ local function localProfile(player)
     return get(first("HeldenGameInstance"),"ProfileSaveGame")
 end
 local sessionAwarded={}
+local sessionPending={}
 local function playerKey(player)
     local ok,id=pcall(function() return player.state:GetFullName() end)
     return (ok and tostring(id)) or objName(player.pc)
@@ -201,10 +202,16 @@ end
 local function alreadyOwned(player,id)
     local key=playerKey(player)
     if sessionAwarded[key] and sessionAwarded[key][id] then return true end
+    if sessionPending[key] and sessionPending[key][id] then return true end
     if ownsFromArray(get(player.state,"NewCosmeticUnlocks"),id) then return true end
     local profile=localProfile(player)
     if valid(profile) and ownsFromArray(get(profile,"UnlockedCosmetics"),id) then return true end
     return false
+end
+local function setPending(player,id,yes)
+    local key=playerKey(player)
+    sessionPending[key]=sessionPending[key] or {}
+    sessionPending[key][id]=yes and true or nil
 end
 local function remember(player,id)
     local key=playerKey(player)
@@ -247,32 +254,50 @@ local function nativeAward(job,player,id)
         return false,"CosmeticID write/readback failed"
     end
     pcall(function() loot:OnRep_CosmeticID() end)
-    local before=alreadyOwned(player,id)
-    -- Actor's Interact_Auth may be implemented in the inherited
-    -- HeldenInteractableObject; never call visual PickedUpBy_Multicast as payout.
-    local acted,err=pcall(function() loot:Interact_Auth(player.pawn) end)
+    -- Interact(InCharacter) is reflected on the inherited HeldenInteractableObject.
+    -- No fictional Interact_Auth method, no visual-only PickedUpBy_Multicast payout.
+    -- Native code may confirm pickup on a later tick, so keep actor alive briefly.
+    local acted,err=pcall(function() loot:Interact(player.pawn) end)
     if not acted then
-        acted,err=pcall(function() loot:Interact(player.pawn) end)
+        pcall(function() loot:K2_DestroyActor() end)
+        return false,"native Interact failed: "..tostring(err)
     end
-    local picked=get(loot,"bPickedUp")==true
-    local ownedNow=alreadyOwned(player,id)
-    if valid(loot) then pcall(function() loot:K2_DestroyActor() end) end
-    if not acted then return false,"native pickup failed: "..tostring(err) end
-    if before then return false,"already owned in new snapshot" end
-    if picked or ownedNow then
-        remember(player,id)
-        return true,ownedNow and "profile/state observed" or "native bPickedUp observed"
-    end
-    return false,"native pickup called but no bPickedUp or profile/state confirmation"
+    return true,loot
 end
-local S={seen={},queue={},errors=0,kills=0,awards=0,skips=0}
+local S={seen={},queue={},pending={},errors=0,kills=0,awards=0,skips=0}
 local function warn(msg)
     if S.errors<CFG.MaxLogErrors then
         S.errors=S.errors+1
         log("WARN "..msg)
     end
 end
+local function finishPending()
+    for i=#S.pending,1,-1 do
+        local job=S.pending[i]
+        local picked=valid(job.loot) and get(job.loot,"bPickedUp")==true
+        -- Query actual profile/state (not the session pending reservation).
+        local profile=localProfile(job.player)
+        local owned=(valid(profile) and ownsFromArray(get(profile,"UnlockedCosmetics"),job.id))
+            or ownsFromArray(get(job.player.state,"NewCosmeticUnlocks"),job.id)
+        job.ticks=job.ticks+1
+        if picked or owned or job.ticks>=8 then
+            setPending(job.player,job.id,false)
+            if picked or owned then
+                remember(job.player,job.id)
+                S.awards=S.awards+1
+                log("PICKUP CONFIRMED pattern="..job.id.." enemy="..job.enemy..
+                    " proof="..(owned and "profile/state" or "native bPickedUp"))
+            else
+                warn("PICKUP NOT CONFIRMED pattern="..job.id.." enemy="..job.enemy..
+                    " (no profile/state or bPickedUp after 8 ticks)")
+            end
+            if valid(job.loot) then pcall(function() job.loot:K2_DestroyActor() end) end
+            table.remove(S.pending,i)
+        end
+    end
+end
 local function flush()
+    finishPending()
     if not isHost() then return end
     local budget=math.min(#S.queue,CFG.MaxQueue)
     for _=1,budget do
@@ -286,14 +311,16 @@ local function flush()
                 S.skips=S.skips+1
                 if S.skips<=5 then log("SKIP: receiving player has all visible pattern candidates") end
             elseif math.random()<CFG.Chance then
-                local ok,success,message=pcall(nativeAward,job,job.player,id)
-                if ok and success then
-                    S.awards=S.awards+1
-                    log("AWARD pattern="..id.." candidatesRemaining="..available..
-                        " enemy="..job.enemy.." ("..tostring(message)..")")
+                local ok,success,lootOrError=pcall(nativeAward,job,job.player,id)
+                if ok and success and valid(lootOrError) then
+                    setPending(job.player,id,true)
+                    S.pending[#S.pending+1]={loot=lootOrError,id=id,
+                        player=job.player,enemy=job.enemy,ticks=0}
+                    log("PICKUP ATTEMPT pattern="..id.." candidatesRemaining="..available..
+                        " enemy="..job.enemy.."; verifying native confirmation")
                 else
-                    warn("GRANT UNVERIFIED pattern="..id.." enemy="..job.enemy..
-                        " reason="..tostring(ok and message or success))
+                    warn("GRANT FAILED pattern="..id.." enemy="..job.enemy..
+                        " reason="..tostring(ok and lootOrError or success))
                 end
             end
         end
