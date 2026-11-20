@@ -1,0 +1,43 @@
+name: Grain Rot Enemy Pattern Drops — test and package
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "ue4ss/**"
+      - "tests/**"
+      - ".github/workflows/ci.yml"
+      - "README.md"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Lua 5.4
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y lua5.4
+      - name: Validate Lua syntax
+        run: |
+          luac5.4 -p ue4ss/Mods/GrainRotEnemyPatternDrops/Scripts/main.lua
+          luac5.4 -p tests/test_enemy_pattern_drops.lua
+      - name: Run mock regression tests
+        run: lua5.4 tests/test_enemy_pattern_drops.lua
+      - name: Build installation ZIP
+        run: |
+          mkdir -p out
+          zip -r out/GrainRotEnemyPatternDrops-v0.1.0-alpha.zip ue4ss/Mods/GrainRotEnemyPatternDrops
+          unzip -t out/GrainRotEnemyPatternDrops-v0.1.0-alpha.zip
+      - name: Upload installation ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: GrainRotEnemyPatternDrops-v0.1.0-alpha
+          path: out/GrainRotEnemyPatternDrops-v0.1.0-alpha.zip
+          if-no-files-found: error
