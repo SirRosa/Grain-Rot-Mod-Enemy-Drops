@@ -1,6 +1,13 @@
 # Grain Rot — Enemy Pattern Drops
 
-**v0.1.1-fps-alpha (test build).** UE4SS 3.x Lua mod for `Helden` / Grain Rot.
+**v0.1.2-5pct (test build).** UE4SS 3.x Lua mod for `Helden` / Grain Rot.
+
+## v0.1.2 drop chance (2026-11-20)
+
+- Changed per-enemy chance from 100% to **5%**.
+- Moved chance roll before the costly player controller / ownership lookups; unsuccessful rolls avoid native cosmetic and profile work.
+- Added deterministic probability boundary tests (roll = 0.05 is rejected, roll = 0.0499 is accepted).
+- Kept v0.1.1 FPS optimizations and native unlock behavior.
 
 ## v0.1.1 FPS hotfix (2026-11-20)
 
@@ -10,7 +17,7 @@
 - Cache the authoritative `GameMode`, the local `GameInstance`, the cosmetic DataTable candidate list, and the cosmetic loot Blueprint after first discovery.
 - Prewarm assets **during idle game-thread timer ticks**, before the first kill when possible. Cache lookup retries are throttled when assets are not loaded.
 - Build a set of owned cosmetic IDs **once per award**, rather than rescanning native TArrays for every candidate.
-- Process at most **one cosmetic pickup per timer tick** and require **two 350ms timer ticks between award attempts**. A multi-kill queue is not granted all at once. The roll chance is still 100%.
+- Process at most **one cosmetic pickup per timer tick** and require **two 350ms timer ticks between award attempts**. A multi-kill queue is not granted all at once. Since v0.1.2 the chance is 5%.
 - Emit `PERF SpawnActor`, `PERF OnRep_CosmeticID`, `PERF NativeInteract`, `PERF PrewarmDataTable`, and `PERF DeathCallback` entries only for operations over ~18ms of Lua/engine CPU time. `os.clock` is used **only** for diagnostic durations, not for delays/scheduling.
 - The test suite includes checks that kill callbacks do no global registry, DataTable or Blueprint lookup, plus a four-enemy burst test.
 
@@ -18,7 +25,7 @@
 
 ## Requested behavior
 
-- **100%** test chance per killed enemy (`Chance=1.0` in `main.lua`).
+- **5%** independent chance per killed enemy (`Chance=0.05` in `main.lua`). A pattern is granted only on a successful roll; each success selects one not-yet-owned pattern.
 - Choose **one random pattern texture/color** not yet owned by the receiving player.
 - Applies to **Story Mode and Expedition Mode**; no forced Expedition-only check.
 - Award via the game's **native `HeldenCosmeticLoot:Interact(InCharacter)`**. This is a transient pickup, not a permanent physics drop on the floor.
@@ -29,10 +36,10 @@
 ## Install
 
 1. **Back up the game profile and saves.** This alpha changes permanent cosmetics.
-2. Download `GrainRotEnemyPatternDrops-v0.1.1-fps-alpha` artifact from the successful [GitHub Actions test/package run](../../actions/workflows/ci.yml); open the artifact and extract the enclosed ZIP.
+2. Download `GrainRotEnemyPatternDrops-v0.1.2-5pct` artifact from the successful [GitHub Actions test/package run](../../actions/workflows/ci.yml); open the artifact and extract the enclosed ZIP.
 3. Unzip the installation ZIP into `Grain Rot/Helden/Binaries/Win64/`, leaving the existing UE4SS installation untouched.
 4. Check files: `ue4ss/Mods/GrainRotEnemyPatternDrops/Scripts/main.lua` and `ue4ss/Mods/GrainRotEnemyPatternDrops/enabled.txt`.
-5. **Host only** in multiplayer. On an expendable profile, defeat at least two enemies and inspect `UE4SS.log` for `[GrainRotEnemyPatternDrops]` records.
+5. **Host only** in multiplayer. On an expendable profile, defeat multiple enemies and inspect `UE4SS.log` for `[GrainRotEnemyPatternDrops]` records.
 6. Open cosmetic customization: verify each unlocked texture/color is selectable. Save, quit, restart, and confirm unlocks remain. Repeat with a client and both gameplay modes.
 
 ## Technical research (grounded, but NOT live-confirmed)
@@ -69,6 +76,6 @@ Read `SirRosa/Grain-Rot-Mod-Data-Base` (current USMAP + 32MB ObjectDump, build `
 
 ## Maintenance
 
-- Change `CFG.Chance` from `1.0` to a decimal once the alpha works (e.g. `0.05` = 5%).
+- Edit `CFG.Chance` to change probability (`0.05` = 5%, `1.0` = 100%).
 - Run the `test-package` workflow for syntax, mock tests and installation ZIP.
 - `inspect-reflection.yml` independently audits actual user-provided mapping and ObjectDump from [Grain-Rot-Mod-Data-Base](https://github.com/SirRosa/Grain-Rot-Mod-Data-Base).
