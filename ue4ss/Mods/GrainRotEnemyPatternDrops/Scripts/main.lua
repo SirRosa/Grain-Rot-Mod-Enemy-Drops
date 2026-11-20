@@ -1,9 +1,9 @@
--- Grain Rot Enemy Pattern Drops v0.1.1-fps-alpha (Helden UE5.7 / UE4SS 3.x)
--- 100% TEST chance. Award one unseen PatternTexture/PatternColor per ENEMY death.
+-- Grain Rot Enemy Pattern Drops v0.1.2-5pct (Helden UE5.7 / UE4SS 3.x)
+-- 5% chance per enemy death; successful rolls award one unseen PatternTexture/PatternColor.
 -- Do not alter UProfileSaveGame's TArray directly: native cosmetic pickup must do that.
 -- Kill notifications and spawning are processed on the authoritative game thread.
 local CFG = {
-    Chance = 1.0, -- change to e.g. 0.05 AFTER real-game verification
+    Chance = 0.05, -- 5% independent roll per enemy death
     TickMs = 350,
     MaxQueue = 256,           -- FIFO; do not drop bursts of enemy kills
     MaxAwardsPerTick = 1,     -- never spawn/interact with a burst of cosmetic actors
@@ -388,6 +388,9 @@ local function flush()
     -- Processing only ONE grant per tick prevents a multi-kill from firing
     -- numerous SpawnActor + native Interact calls on a single game frame.
     local job=table.remove(S.queue,1)
+    -- Roll BEFORE expensive controller/profile/ownership lookups.
+    -- On the other ~95% of kills, nothing else needs to be done.
+    if math.random()>=CFG.Chance then return end
     local player=nearestPlayer(job.ep)
     if not player then
         warn("NO LIVING PLAYER for enemy "..job.enemy)
@@ -400,7 +403,6 @@ local function flush()
         if S.skips<=5 then log("SKIP: player has all known pattern candidates") end
         return
     end
-    if math.random()>=CFG.Chance then return end
     S.lastAwardTick=S.tick
     local ok,success,lootOrError=pcall(nativeAward,job,player,id)
     if ok and success and valid(lootOrError) then
@@ -463,4 +465,4 @@ if not ok then
     -- Do not write into UObject from an asynchronous worker thread.
     warn("game-thread timer unavailable; no rewards until scheduler works: "..tostring(err))
 end
-log("loaded v0.1.1-fps-alpha chance=100% prewarm=true grantsPerTick=1 minGapTicks=2 modes=Story+Expedition")
+log("loaded v0.1.2-5pct chance=5% prewarm=true grantsPerTick=1 minGapTicks=2 modes=Story+Expedition")
