@@ -71,7 +71,7 @@ local function runCase(cfg)
     end
     _G.FindFirstOf=function(class)
         if class=="HeldenGameMode" or class=="GameModeBase" then
-            return cfg.client and nil or gm
+            if cfg.client then return nil else return gm end
         elseif class=="HeldenDataSingleton" then return data
         elseif class=="HeldenGameInstance" then return gi end
     end
