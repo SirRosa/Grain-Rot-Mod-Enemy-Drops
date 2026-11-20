@@ -45,3 +45,23 @@ print("=== CLASSES MATCHED IN OBJECT DUMP ===")
 for line in lines:
     if "Class /Script/Helden." in line and select.search(line):
         print(line.split("] ",1)[-1].split(" [n:",1)[0])
+
+
+print("=== REFLECTED METHODS: PROFILE/COSMETIC LOOT/DEATH ===")
+wanted={"HeldenGameInstance","HeldenProfileSaveGame","HeldenSaveGameSystem","HeldenPlayerState","HeldenCosmeticLoot","HeldenDataSingleton","HeldenDungeonEnemyManager","HeldenCharacter","HeldenCharacterStats","HeldenCharacterSoul","HeldenCosmeticMenuWidget","HeldenCheatManager","HeldenPlayerController"}
+for i,line in enumerate(lines):
+    if "Function /Script/Helden." not in line: continue
+    head=line.split("Function /Script/Helden.",1)[-1].split(" ",1)[0]
+    cls=head.split(":",1)[0]
+    if cls not in wanted: continue
+    print(cls+":"+head.split(":",1)[-1])
+    for arg in lines[i+1:i+7]:
+        if "/Script/Helden."+cls+":"+head.split(":",1)[-1]+":" in arg:
+            print("  "+arg.split("] ",1)[-1].split(" [o:",1)[0])
+        else: break
+print("=== CLASS/OBJECTS COSMETIC PROFILE ASSET PATHS ===")
+c=0
+for line in lines:
+    if re.search(r"(?:Class|BlueprintGeneratedClass|DataTable) (?!/Script/)(?:[^ ]*(Cosmetic|Pattern|Profile|Enemy)[^ ]*)",line,re.I):
+        print(line[:300]);c+=1
+        if c>120:break
