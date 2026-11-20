@@ -1,0 +1,22 @@
+name: Inspect Grain Rot reflection for pattern and enemy APIs
+
+on:
+  push:
+    paths:
+      - tools/inspect_reflection.py
+      - .github/workflows/inspect-reflection.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Retrieve public mapping database
+        run: git clone --depth=1 https://github.com/SirRosa/Grain-Rot-Mod-Data-Base.git knowledge
+      - name: Search existing USMAP and actual object dump
+        run: python3 tools/inspect_reflection.py
