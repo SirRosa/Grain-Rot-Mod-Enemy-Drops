@@ -81,7 +81,7 @@ local function runCase(cfg)
     end
     _G.StaticFindObject=function(path)
         if path:find("BP_HeldenCosmeticLoot",1,true) then
-            return cfg.missingBlueprint and nil or blueprint
+            if cfg.missingBlueprint then return nil else return blueprint end
         end
     end
     local originalPrint=print
