@@ -1,11 +1,16 @@
--- Grain Rot Enemy Pattern Drops v0.1.0-alpha (Helden UE5.7 / UE4SS 3.x)
+-- Grain Rot Enemy Pattern Drops v0.1.1-fps-alpha (Helden UE5.7 / UE4SS 3.x)
 -- 100% TEST chance. Award one unseen PatternTexture/PatternColor per ENEMY death.
 -- Do not alter UProfileSaveGame's TArray directly: native cosmetic pickup must do that.
 -- Kill notifications and spawning are processed on the authoritative game thread.
 local CFG = {
     Chance = 1.0, -- change to e.g. 0.05 AFTER real-game verification
     TickMs = 350,
-    MaxQueue = 64,
+    MaxQueue = 256,           -- FIFO; do not drop bursts of enemy kills
+    MaxAwardsPerTick = 1,     -- never spawn/interact with a burst of cosmetic actors
+    MinAwardGapTicks = 2,     -- >= 700ms at TickMs=350 between new unlocks
+    AssetRetryTicks = 10,     -- expensive lookups are performed only during prewarm
+    HostRetryTicks = 20,
+    PerfWarnMs = 18,          -- log CPU-time hotspots, not every death
     MaxLogErrors = 20,
 }
 local TAG = "[GrainRotEnemyPatternDrops] "
@@ -71,8 +76,13 @@ local function first(cls)
     end
     return nil
 end
+-- Cache the authoritative GameMode: FindFirstOf/FindAllOf each kill or tick
+-- was a major source of object-registry churn.
+local cachedGameMode
 local function isHost()
-    return valid(first("HeldenGameMode")) or valid(first("GameModeBase"))
+    if valid(cachedGameMode) then return true end
+    cachedGameMode=first("HeldenGameMode") or first("GameModeBase")
+    return valid(cachedGameMode)
 end
 local function characterType(c)
     if not valid(c) then return nil end
@@ -186,12 +196,14 @@ local function ownsFromArray(arr,id)
     arrayEach(arr,function(v) if asInt(v)==id then found=true end end)
     return found
 end
+local cachedGI
 local function localProfile(player)
-    -- Local GI represents the host, NOT the profiles of remote players.
+    -- The host's GI is not a remote player's profile; never share ownership.
     if not valid(player.pc) then return nil end
     local ok,localPC=pcall(function() return player.pc:IsLocalController() end)
     if not ok or localPC~=true then return nil end
-    return get(first("HeldenGameInstance"),"ProfileSaveGame")
+    if not valid(cachedGI) then cachedGI=first("HeldenGameInstance") end
+    return get(cachedGI,"ProfileSaveGame")
 end
 local sessionAwarded={}
 local sessionPending={}
@@ -219,22 +231,52 @@ local function remember(player,id)
     sessionAwarded[key][id]=true
 end
 local function choose(player,items)
+    -- One profile/PlayerState snapshot, O(owned + patterns) per reward.
+    -- Previously this scanned whole native arrays and found the GI once
+    -- FOR EACH pattern candidate, producing long death-time stalls.
+    local key=playerKey(player)
+    local owned={}
+    arrayEach(get(player.state,"NewCosmeticUnlocks"),function(id)
+        local n=asInt(id);if n then owned[n]=true end
+    end)
+    local profile=localProfile(player)
+    if valid(profile) then
+        arrayEach(get(profile,"UnlockedCosmetics"),function(id)
+            local n=asInt(id);if n then owned[n]=true end
+        end)
+    end
+    for id in pairs(sessionAwarded[key] or {}) do owned[id]=true end
+    for id,yes in pairs(sessionPending[key] or {}) do
+        if yes then owned[id]=true end
+    end
     local available={}
     for _,id in ipairs(items) do
-        if not alreadyOwned(player,id) then available[#available+1]=id end
+        if not owned[id] then available[#available+1]=id end
     end
     if #available==0 then return nil,0 end
     return available[math.random(1,#available)],#available
 end
+local cachedLootClass=nil
 local function lootClass()
+    if valid(cachedLootClass) then return cachedLootClass end
     for _,path in ipairs({
         "/Game/Gameplay/Loot/CosmeticLoot/BP_HeldenCosmeticLoot_TexturePattern_01.BP_HeldenCosmeticLoot_TexturePattern_01_C",
         "/Game/Gameplay/Loot/CosmeticLoot/BP_HeldenCosmeticLoot_01.BP_HeldenCosmeticLoot_01_C"
     }) do
         local ok,cls=pcall(StaticFindObject,path)
-        if ok and valid(cls) then return cls,path end
+        if ok and valid(cls) then
+            cachedLootClass=cls
+            return cls
+        end
     end
     return nil
+end
+local function perf(section,start)
+    -- os.clock measures CPU time, NOT wall time. Here it is a profiler only.
+    local elapsed=(os.clock()-start)*1000
+    if elapsed>=CFG.PerfWarnMs then
+        log(string.format("PERF %s cpu_ms=%.1f",section,elapsed))
+    end
 end
 local function nativeAward(job,player,id)
     local cls=lootClass()
@@ -244,27 +286,37 @@ local function nativeAward(job,player,id)
     -- Spawn close to the receiving player, immediately invoke the game's
     -- existing authoritative pickup, then remove the transient actor.
     local spawnPos={X=p.X,Y=p.Y,Z=p.Z+40}
+    local started=os.clock()
     local ok,loot=pcall(function()
         return job.world:SpawnActor(cls,spawnPos,{Pitch=0,Yaw=0,Roll=0})
     end)
+    perf("SpawnActor",started)
     if not ok or not valid(loot) then return false,"SpawnActor failed: "..tostring(loot) end
     local wrote=pcall(function() loot.CosmeticID=id end)
     if not wrote or asInt(get(loot,"CosmeticID"))~=id then
         pcall(function() loot:K2_DestroyActor() end)
         return false,"CosmeticID write/readback failed"
     end
+    local repStarted=os.clock()
     pcall(function() loot:OnRep_CosmeticID() end)
+    perf("OnRep_CosmeticID",repStarted)
     -- Interact(InCharacter) is reflected on the inherited HeldenInteractableObject.
     -- No fictional Interact_Auth method, no visual-only PickedUpBy_Multicast payout.
     -- Native code may confirm pickup on a later tick, so keep actor alive briefly.
+    local interactStarted=os.clock()
     local acted,err=pcall(function() loot:Interact(player.pawn) end)
+    perf("NativeInteract",interactStarted)
     if not acted then
         pcall(function() loot:K2_DestroyActor() end)
         return false,"native Interact failed: "..tostring(err)
     end
     return true,loot
 end
-local S={seen={},queue={},pending={},errors=0,kills=0,awards=0,skips=0}
+local S={
+    seen={},queue={},pending={},errors=0,kills=0,awards=0,skips=0,
+    tick=0,lastAwardTick=-100,hostRetryAt=0,assetsRetryAt=0,
+    hostActive=false,hostReported=false,assetsReady=false,
+}
 local function warn(msg)
     if S.errors<CFG.MaxLogErrors then
         S.errors=S.errors+1
@@ -297,59 +349,95 @@ local function finishPending()
     end
 end
 local function flush()
-    finishPending()
-    if not isHost() then return end
-    local budget=math.min(#S.queue,CFG.MaxQueue)
-    for _=1,budget do
-        local job=table.remove(S.queue,1)
-        local list,why=candidates()
-        if not list then
-            warn(why)
-        else
-            local id,available=choose(job.player,list)
-            if not id then
-                S.skips=S.skips+1
-                if S.skips<=5 then log("SKIP: receiving player has all visible pattern candidates") end
-            elseif math.random()<CFG.Chance then
-                local ok,success,lootOrError=pcall(nativeAward,job,job.player,id)
-                if ok and success and valid(lootOrError) then
-                    setPending(job.player,id,true)
-                    S.pending[#S.pending+1]={loot=lootOrError,id=id,
-                        player=job.player,enemy=job.enemy,ticks=0}
-                    log("PICKUP ATTEMPT pattern="..id.." candidatesRemaining="..available..
-                        " enemy="..job.enemy.."; verifying native confirmation")
-                else
-                    warn("GRANT FAILED pattern="..id.." enemy="..job.enemy..
-                        " reason="..tostring(ok and lootOrError or success))
-                end
-            end
+    S.tick=S.tick+1
+    -- A missing GameMode is normal on clients and while changing levels.
+    -- Do not enumerate all UObjects 3x per second for that condition.
+    if not S.hostActive then
+        if S.tick<S.hostRetryAt then return end
+        S.hostRetryAt=S.tick+CFG.HostRetryTicks
+        S.hostActive=isHost()
+        if S.hostActive and not S.hostReported then
+            S.hostReported=true
+            log("host detected; prewarming cosmetic table and Blueprint")
         end
+    elseif not valid(cachedGameMode) then
+        S.hostActive=false
+        return
+    end
+    if not S.hostActive then return end
+
+    -- Asset discovery happens before combat where possible. The expensive
+    -- DataTable/StaticFindObject paths are cached, never rescanned per kill.
+    if not S.assetsReady and S.tick>=S.assetsRetryAt then
+        S.assetsRetryAt=S.tick+CFG.AssetRetryTicks
+        local t=os.clock()
+        local patterns=candidates()
+        perf("PrewarmDataTable",t)
+        t=os.clock()
+        local klass=lootClass()
+        perf("PrewarmBlueprint",t)
+        S.assetsReady=patterns~=nil and valid(klass)
+        if S.assetsReady then
+            log("cosmetic assets prewarmed; awards queued="..#S.queue)
+        end
+    end
+    finishPending()
+    if not S.assetsReady or #S.queue==0 then return end
+    if S.tick-S.lastAwardTick<CFG.MinAwardGapTicks then return end
+
+    -- Processing only ONE grant per tick prevents a multi-kill from firing
+    -- numerous SpawnActor + native Interact calls on a single game frame.
+    local job=table.remove(S.queue,1)
+    local player=nearestPlayer(job.ep)
+    if not player then
+        warn("NO LIVING PLAYER for enemy "..job.enemy)
+        return
+    end
+    local list=candidatesCache
+    local id,available=choose(player,list)
+    if not id then
+        S.skips=S.skips+1
+        if S.skips<=5 then log("SKIP: player has all known pattern candidates") end
+        return
+    end
+    if math.random()>=CFG.Chance then return end
+    S.lastAwardTick=S.tick
+    local ok,success,lootOrError=pcall(nativeAward,job,player,id)
+    if ok and success and valid(lootOrError) then
+        setPending(player,id,true)
+        S.pending[#S.pending+1]={loot=lootOrError,id=id,
+            player=player,enemy=job.enemy,ticks=0}
+        log("PICKUP ATTEMPT pattern="..id.." candidatesRemaining="..available..
+            " enemy="..job.enemy.."; verification pending")
+    else
+        warn("GRANT FAILED pattern="..id.." enemy="..job.enemy..
+            " reason="..tostring(ok and lootOrError or success))
     end
 end
 local function onDeath(_,arg)
-    if not isHost() then return end
+    -- CRITICAL PATH: never scan PlayerControllers, GI, DataTables or assets
+    -- from inside the engine's OnCharacterDeath call.
+    local started=os.clock()
     local enemy=unwrap(arg)
     if characterType(enemy)~=4 then return end
     local key=objName(enemy)
     if S.seen[key] then return end
     S.seen[key]=true
     S.kills=S.kills+1
-    local ep=pos(enemy)
-    local player=nearestPlayer(ep)
-    if not player then
-        warn("NO PLAYER near enemy "..key)
-        return
-    end
-    local ok,world=pcall(function() return enemy:GetWorld() end)
-    if not ok or not valid(world) then
-        warn("NO WORLD for "..key)
-        return
-    end
     if #S.queue>=CFG.MaxQueue then
-        warn("queue capacity reached, refusing reward for "..key)
+        warn("queue full ("..CFG.MaxQueue.."); pattern reward refused for "..key)
         return
     end
-    S.queue[#S.queue+1]={player=player,world=world,enemy=key}
+    -- Capture world/position NOW: the dead actor may be destroyed before
+    -- the staggered award timer processes this event.
+    local ep=pos(enemy)
+    local ok,world=pcall(function() return enemy:GetWorld() end)
+    if not ok or not valid(world) or not ep then
+        warn("NO WORLD/POS for dead enemy "..key)
+        return
+    end
+    S.queue[#S.queue+1]={ep=ep,world=world,enemy=key}
+    perf("DeathCallback",started)
 end
 local function onSpawn(_,arg)
     local enemy=unwrap(arg)
@@ -375,4 +463,4 @@ if not ok then
     -- Do not write into UObject from an asynchronous worker thread.
     warn("game-thread timer unavailable; no rewards until scheduler works: "..tostring(err))
 end
-log("loaded v0.1.0-alpha chance=100% modes=Story+Expedition; native cosmetic pickup; runtime verification required")
+log("loaded v0.1.1-fps-alpha chance=100% prewarm=true grantsPerTick=1 minGapTicks=2 modes=Story+Expedition")
