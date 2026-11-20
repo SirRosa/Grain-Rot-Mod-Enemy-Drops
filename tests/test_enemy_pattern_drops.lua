@@ -91,7 +91,18 @@ local function runCase(cfg)
     local originalPrint=print
     _G.print=function(s) logs[#logs+1]=tostring(s) end
     local ok,err=pcall(function()
-        local mod=assert(loadfile(FILE))
+        -- Force a deterministic drop roll for gameplay regression cases,
+        -- independently of the random pattern index.
+        local mockMath=setmetatable({
+            random=function(a,b)
+                if a==nil then return cfg.roll or 0.0 end
+                if b~=nil then return math.random(a,b) end
+                return math.random(a)
+            end,
+            randomseed=function() end,
+        },{__index=math})
+        local env=setmetatable({math=mockMath},{__index=_G})
+        local mod=assert(loadfile(FILE,"t",env))
         mod()
     end)
     _G.print=originalPrint
@@ -226,4 +237,24 @@ do
     check(e.stats.tableScans==1,"no burst DataTable rescan")
     check(e.stats.staticCalls==1,"no burst Blueprint lookup")
 end
-print("PASS: "..total.." assertions across 12 mock scenarios (NOT a real-game test)")
+-- At 5%, 0.0500 does NOT drop and 0.0499 DOES drop.
+do
+    local e=runCase({roll=0.05})
+    e.event(4,"RollExactlyFivePercent")
+    e.tick(2)
+    check(e.stats.spawned==0,"roll at 5% threshold must not award")
+    check(e.stats.findAllCalls==0,"failed roll skips player lookup")
+end
+do
+    local e=runCase({roll=0.99})
+    e.event(4,"RollNearOne")
+    e.tick(2)
+    check(e.stats.spawned==0,"failed 99% roll must not award")
+end
+do
+    local e=runCase({roll=0.0499})
+    e.event(4,"RollBelowFivePercent")
+    e.tick(2)
+    check(e.stats.spawned==1,"roll below 5% awards one native cosmetic")
+end
+print("PASS: "..total.." assertions across 15 mock scenarios (NOT a real-game test)")
