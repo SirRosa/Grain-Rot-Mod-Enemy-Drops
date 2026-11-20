@@ -112,7 +112,7 @@ local function nearestPlayer(enemyPos)
             local pawn=pawnOf(pc)
             local st=valid(pawn) and get(pawn,"PlayerState") or nil
             if not valid(st) then st=get(pc,"PlayerState") end
-            if valid(pawn) and valid(st) then
+            if valid(pawn) and valid(st) and enum(get(pawn,"CharacterState"))~=1 then
                 local d=dist2(pos(pawn),enemyPos)
                 if d<best then
                     nearest={pc=pc,pawn=pawn,state=st}
@@ -353,7 +353,8 @@ local function onDeath(_,arg)
 end
 local function onSpawn(_,arg)
     local enemy=unwrap(arg)
-    if characterType(enemy)==4 then S.seen[objName(enemy)]=nil end
+    -- Manager only invokes this for spawned enemies; the type may not yet be initialized.
+    if valid(enemy) then S.seen[objName(enemy)]=nil end
 end
 local function hook(method,fn)
     local ok,result=pcall(RegisterHook,method,fn)
