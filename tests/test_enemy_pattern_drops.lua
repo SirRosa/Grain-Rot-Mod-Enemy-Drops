@@ -32,14 +32,16 @@ local function runCase(cfg)
         {UniqueID=103,DataName="DefaultHat",Category="Hat",SteamInventoryID=0},
     }
     local dt=obj("CosmeticDataTable")
+    local stats={spawned=0,picked=0,destroyed=0,attempted={},loot={},
+        tableScans=0,findAllCalls=0,staticCalls=0}
     function dt:ForEachRow(fn)
+        stats.tableScans=stats.tableScans+1
         for _,r in ipairs(rows) do fn(r.DataName,r) end
     end
     local data=obj("DataSingleton",{CosmeticDataTable=dt})
     local gi=obj("GameInstance",{ProfileSaveGame=profile})
     local gm=obj("GameMode")
     local blueprint=obj("BP_CosmeticLoot_Class")
-    local stats={spawned=0,picked=0,destroyed=0,attempted={},loot={}}
     function world:SpawnActor(cls,position,rotation)
         assert(cls==blueprint)
         stats.spawned=stats.spawned+1
@@ -76,10 +78,12 @@ local function runCase(cfg)
         elseif class=="HeldenGameInstance" then return gi end
     end
     _G.FindAllOf=function(class)
+        stats.findAllCalls=stats.findAllCalls+1
         if class=="HeldenPlayerController" then return {controller} end
         return {}
     end
     _G.StaticFindObject=function(path)
+        stats.staticCalls=stats.staticCalls+1
         if path:find("BP_HeldenCosmeticLoot",1,true) then
             if cfg.missingBlueprint then return nil else return blueprint end
         end
@@ -185,4 +189,41 @@ do
     check(#e.profile.UnlockedCosmetics==0,"remote player's cosmetic must not touch host profile")
     check(#e.state.NewCosmeticUnlocks==1,"remote player's state receives notification")
 end
-print("PASS: "..total.." assertions across 10 mock scenarios (NOT a real-game test)")
+-- The death callback should contain no object-registry or DataTable traversal.
+do
+    local e=runCase({})
+    e.event(4,"FastEnemyA")
+    check(e.stats.findAllCalls==0,"death callback does not enumerate UObjects")
+    check(e.stats.tableScans==0,"death callback does not scan cosmetic DataTable")
+    check(e.stats.staticCalls==0,"death callback does not load cosmetic Blueprints")
+    check(e.stats.spawned==0,"no native actor spawned inside death callback")
+    e.tick(1)
+    check(e.stats.tableScans==1,"table prewarmed exactly once")
+    check(e.stats.staticCalls==1,"native loot class prewarmed exactly once")
+    e.event(4,"FastEnemyB")
+    e.tick(2)
+    check(e.stats.tableScans==1,"cosmetic DataTable not rescanned for later enemy")
+    check(e.stats.staticCalls==1,"cosmetic Blueprint not reloaded per kill")
+end
+-- Bursts are queued, not executed on the same frame, while every kill retains its grant.
+do
+    local e=runCase({rows={
+        {UniqueID=101,DataName="PatternTexture_A",Category="PatternTexture",SteamInventoryID=0},
+        {UniqueID=102,DataName="PatternTexture_B",Category="PatternTexture",SteamInventoryID=0},
+        {UniqueID=103,DataName="PatternTexture_C",Category="PatternTexture",SteamInventoryID=0},
+        {UniqueID=104,DataName="PatternTexture_D",Category="PatternTexture",SteamInventoryID=0},
+    }})
+    e.event(4,"Burst1");e.event(4,"Burst2");e.event(4,"Burst3");e.event(4,"Burst4")
+    check(e.stats.spawned==0,"four simultaneous deaths cause no synchronous pickup")
+    e.tick(1)
+    check(e.stats.spawned==1,"burst budget allows one cosmetic on first tick")
+    e.tick(1)
+    check(e.stats.spawned==1,"minimum gap enforces no second cosmetic on adjacent tick")
+    e.tick(1)
+    check(e.stats.spawned==2,"second unlock is staggered")
+    e.tick(4)
+    check(e.stats.spawned==4,"all four enemy kills eventually reward")
+    check(e.stats.tableScans==1,"no burst DataTable rescan")
+    check(e.stats.staticCalls==1,"no burst Blueprint lookup")
+end
+print("PASS: "..total.." assertions across 12 mock scenarios (NOT a real-game test)")
