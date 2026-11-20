@@ -33,11 +33,11 @@ jobs:
       - name: Build installation ZIP
         run: |
           mkdir -p out
-          zip -r out/GrainRotEnemyPatternDrops-v0.1.0-alpha.zip ue4ss/Mods/GrainRotEnemyPatternDrops
-          unzip -t out/GrainRotEnemyPatternDrops-v0.1.0-alpha.zip
+          zip -r out/GrainRotEnemyPatternDrops-v0.1.1-fps-alpha.zip ue4ss/Mods/GrainRotEnemyPatternDrops
+          unzip -t out/GrainRotEnemyPatternDrops-v0.1.1-fps-alpha.zip
       - name: Upload installation ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: GrainRotEnemyPatternDrops-v0.1.0-alpha
-          path: out/GrainRotEnemyPatternDrops-v0.1.0-alpha.zip
+          name: GrainRotEnemyPatternDrops-v0.1.1-fps-alpha
+          path: out/GrainRotEnemyPatternDrops-v0.1.1-fps-alpha.zip
           if-no-files-found: error
