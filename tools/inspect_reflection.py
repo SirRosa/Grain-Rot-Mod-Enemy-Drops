@@ -1,41 +1,47 @@
 #!/usr/bin/env python3
-"""Inspect user's existing Grain Rot reflection dump (read-only)."""
+"""Read-only, targeted API audit from the user's actual Helden USMAP/ObjectDump."""
 import gzip
 import json
 import re
 from pathlib import Path
 
-root = Path("knowledge")
-src = root / "data" / "current-schema.json.gz"
-with gzip.open(src, "rt", encoding="utf-8") as f:
-    db = json.load(f)
-print("=== DATABASE KEYS ===", sorted(db.keys()))
-tokens = re.compile(r"pattern|cosmetic|skin|unlock|customiz|decorat|enemy|monster|mob|creature|kill|death|loot|reward|outfit|material|tint|color|palette|appearance", re.I)
-priority = re.compile(r"pattern|cosmetic|skin|unlock|customiz|appearance|enemy|monster", re.I)
-for group in ("structs", "enums"):
-    items = db.get(group, {})
-    names = [n for n in items if tokens.search(n)]
-    print("\n=== MATCHES", group, "total", len(names), "===")
-    for n in names[:220]:
-        body = json.dumps(items[n], ensure_ascii=False, separators=(",", ":"))
-        if priority.search(n):
-            print(n, "=", body[:3000])
-        else:
-            print(n, "=", body[:400])
-    print("=== OTHER SELECTED TYPES ===")
-    for n in ["HeldenGameInstance","HeldenPlayerController","HeldenCharacter","HeldenSaveGame","HeldenPlayerState","HeldenDataSingleton","HeldenGameMode","HeldenGameState"]:
-        if n in items:
-            print(n,"=",json.dumps(items[n],ensure_ascii=False,separators=(",",":"))[:7500])
-parts = sorted((root / "data").glob("UE4SS-ObjectDump.txt.gz.part*"))
-dump = gzip.decompress(b"".join(p.read_bytes() for p in parts)).decode("utf-8", errors="replace")
-lines = dump.splitlines()
-print("\n=== REFLECTION LINE MATCHES (priority) ===")
-selected = [x.strip() for x in lines if priority.search(x)]
-print("total matches",len(selected))
-for row in selected[:350]:
-    print(row[:350])
-print("\n=== REFLECTION LINES DAMAGE/KILL/DEATH (first 180) ===")
-selected = [x.strip() for x in lines if re.search(r"(Helden|BP_).*(Die|Death|Kill|Died|OnHealth|Enemy|Damage|Reward)",x,re.I)]
-print("total",len(selected))
-for row in selected[:180]:
-    print(row[:330])
+root=Path("knowledge/data")
+with gzip.open(root/"current-schema.json.gz","rt",encoding="utf-8") as f: db=json.load(f)
+structs=db["structs"]
+terms=re.compile(r"cosmet|pattern|unlock|profile|enemy|lottery|reward|catalog|characterstats|statcomponent|save|soul|playerstate|playerprofile",re.I)
+
+def show_type(name, full=False):
+    data=structs[name]
+    fields=[p["name"]+":"+p["type"]+(("/"+p.get("struct","")) if p.get("struct") else "") for p in data.get("properties",[])]
+    if full or terms.search(name):
+        print(name,"parent="+str(data.get("parent")),"fields="+", ".join(fields))
+    else:
+        print(name,"fields="+", ".join(x for x in fields if terms.search(x)))
+
+print("=== RELEVANT STRUCT NAMES ===")
+names=[n for n in structs if n.startswith("Helden") and terms.search(n)]
+for n in sorted(names): show_type(n)
+print("=== RELEVANT PROPERTIES IN ALL HELDEN TYPES ===")
+for name,data in sorted(structs.items()):
+    if not name.startswith("Helden") or name in names: continue
+    matches=[p["name"]+":"+p["type"]+(("/"+p.get("struct","")) if p.get("struct") else "") for p in data.get("properties",[]) if terms.search(p["name"])]
+    if matches: print(name,"=>",", ".join(matches))
+print("=== COSMETIC ENUMS ===")
+for name,payload in db["enums"].items():
+    if name.startswith("EHelden") and terms.search(name): print(name, json.dumps(payload,ensure_ascii=False))
+
+parts=sorted(root.glob("UE4SS-ObjectDump.txt.gz.part*"))
+lines=gzip.decompress(b"".join(p.read_bytes() for p in parts)).decode("utf-8",errors="replace").splitlines()
+print("=== TARGETED HELDEN REFLECTED FUNCTIONS ===")
+select=re.compile(r"Cosmetic|Pattern|Unlock|Profile|Lottery|Catalog|Enemy|Die_|OnDeath|Death_|OnKill|Killed|OnHealth|Destroy",re.I)
+for i,line in enumerate(lines):
+    if "Function /Script/Helden." not in line or not select.search(line): continue
+    print(line.split("] ",1)[-1].split(" [n:",1)[0])
+    for arg in lines[i+1:i+9]:
+        if " /Script/Helden." not in arg: break
+        if "Function /" in arg or "Class /" in arg or "ScriptStruct /" in arg: break
+        print("  "+arg.split("] ",1)[-1].split(" [o:",1)[0])
+print("=== CLASSES MATCHED IN OBJECT DUMP ===")
+for line in lines:
+    if "Class /Script/Helden." in line and select.search(line):
+        print(line.split("] ",1)[-1].split(" [n:",1)[0])
